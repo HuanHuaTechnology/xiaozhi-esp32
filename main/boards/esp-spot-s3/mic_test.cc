@@ -10,8 +10,8 @@
 void mic_test_task(void* arg) {
     ESP_LOGI(TAG, "Starting microphone test...");
     
-    Board* board = Board::GetBoard();
-    AudioCodec* codec = board->GetAudioCodec();
+    Board& board = Board::GetInstance();
+    AudioCodec* codec = board.GetAudioCodec();
     
     if (!codec) {
         ESP_LOGE(TAG, "Failed to get audio codec!");
