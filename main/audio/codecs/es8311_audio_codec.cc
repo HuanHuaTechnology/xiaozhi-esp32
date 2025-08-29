@@ -52,6 +52,8 @@ Es8311AudioCodec::Es8311AudioCodec(void* i2c_master_handle, i2c_port_t i2c_port,
     assert(codec_if_ != NULL);
 
     ESP_LOGI(TAG, "Es8311AudioCodec initialized");
+    ESP_LOGI(TAG, "ES8311 config - PA_PIN: GPIO%d, use_mclk: %s, pa_voltage: %.1fV, dac_voltage: %.1fV", 
+             pa_pin, use_mclk ? "true" : "false", es8311_cfg.hw_gain.pa_voltage, es8311_cfg.hw_gain.codec_dac_voltage);
 }
 
 Es8311AudioCodec::~Es8311AudioCodec() {
@@ -90,6 +92,10 @@ void Es8311AudioCodec::UpdateDeviceState() {
     if (pa_pin_ != GPIO_NUM_NC) {
         int level = output_enabled_ ? 1 : 0;
         gpio_set_level(pa_pin_, pa_inverted_ ? !level : level);
+        ESP_LOGI(TAG, "PA control - PIN: GPIO%d, enabled: %s, level: %d", 
+                 pa_pin_, output_enabled_ ? "true" : "false", level);
+    } else {
+        ESP_LOGW(TAG, "PA control - PIN not configured (GPIO_NUM_NC)");
     }
 }
 
@@ -150,7 +156,11 @@ void Es8311AudioCodec::CreateDuplexChannels(gpio_num_t mclk, gpio_num_t bclk, gp
 }
 
 void Es8311AudioCodec::SetOutputVolume(int volume) {
-    ESP_ERROR_CHECK(esp_codec_dev_set_out_vol(dev_, volume));
+    if (dev_ != nullptr) {
+        ESP_ERROR_CHECK(esp_codec_dev_set_out_vol(dev_, volume));
+    } else {
+        ESP_LOGW(TAG, "SetOutputVolume called but device not initialized, volume: %d", volume);
+    }
     AudioCodec::SetOutputVolume(volume);
 }
 

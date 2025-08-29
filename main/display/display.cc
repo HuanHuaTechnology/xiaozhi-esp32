@@ -93,7 +93,11 @@ void Display::ShowNotification(const char* notification, int duration_ms) {
 void Display::UpdateStatusBar(bool update_all) {
     auto& app = Application::GetInstance();
     auto& board = Board::GetInstance();
-    auto codec = board.GetAudioCodec();
+    // 配网阶段不访问音频编解码器，避免触发其初始化
+    AudioCodec* codec = nullptr;
+    if (app.GetDeviceState() != kDeviceStateWifiConfiguring) {
+        codec = board.GetAudioCodec();
+    }
 
     // Update mute icon
     {
@@ -103,10 +107,10 @@ void Display::UpdateStatusBar(bool update_all) {
         }
 
         // 如果静音状态改变，则更新图标
-        if (codec->output_volume() == 0 && !muted_) {
+        if (codec && codec->output_volume() == 0 && !muted_) {
             muted_ = true;
             lv_label_set_text(mute_label_, FONT_AWESOME_VOLUME_MUTE);
-        } else if (codec->output_volume() > 0 && muted_) {
+        } else if (codec && codec->output_volume() > 0 && muted_) {
             muted_ = false;
             lv_label_set_text(mute_label_, "");
         }

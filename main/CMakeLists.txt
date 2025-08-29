@@ -23,6 +23,7 @@ set(SOURCES "audio/audio_codec.cc"
             "ota.cc"
             "settings.cc"
             "device_state_event.cc"
+            "wifi_config_api.cc"
             "main.cc"
             )
 
@@ -216,6 +217,10 @@ elseif(CONFIG_BOARD_TYPE_LABPLUS_LEDONG_V2)
     set(BOARD_TYPE "labplus-ledong-v2") 
 elseif(CONFIG_BOARD_TYPE_SURFER_C3_1_14TFT)
     set(BOARD_TYPE "surfer-c3-1.14tft")
+elseif(CONFIG_BOARD_TYPE_XIAOHESHANG_S3)
+    set(BOARD_TYPE "xiaoheshang-s3")
+elseif(CONFIG_BOARD_TYPE_ESP_SPOT_S3)
+    set(BOARD_TYPE "esp-spot-s3")
 endif()
 file(GLOB BOARD_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/boards/${BOARD_TYPE}/*.cc
@@ -265,6 +270,7 @@ endif()
 idf_component_register(SRCS ${SOURCES}
                     EMBED_FILES ${LANG_SOUNDS} ${COMMON_SOUNDS}
                     INCLUDE_DIRS ${INCLUDE_DIRS}
+                    REQUIRES esp_http_server spi_flash esp_app_format app_update efuse
                     WHOLE_ARCHIVE
                     )
 

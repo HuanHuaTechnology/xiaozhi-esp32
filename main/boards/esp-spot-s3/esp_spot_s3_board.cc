@@ -36,6 +36,9 @@ private:
     static const int64_t LONG_PRESS_TIMEOUT_US = 5 * 1000000ULL;
 
     void InitializeI2c() {
+        ESP_LOGI(TAG, "Initializing I2C for ES8311 - SDA: GPIO%d, SCL: GPIO%d", 
+                 AUDIO_CODEC_I2C_SDA_PIN, AUDIO_CODEC_I2C_SCL_PIN);
+        
         // Initialize I2C peripheral
         i2c_master_bus_config_t i2c_bus_cfg = {
             .i2c_port = I2C_NUM_0,
@@ -50,6 +53,7 @@ private:
             },
         };
         ESP_ERROR_CHECK(i2c_new_master_bus(&i2c_bus_cfg, &i2c_bus_));
+        ESP_LOGI(TAG, "I2C bus initialized successfully: %p", i2c_bus_);
     }
 
     void InitializeADC() {
@@ -83,6 +87,13 @@ private:
     }
 
     void InitializeButtons() {
+        // ===== 强制配置GPIO0为输入模式并启用内部上拉电阻 =====
+        // 解决硬件上拉电阻缺失导致的下载模式问题
+        gpio_reset_pin(BOOT_BUTTON_GPIO);
+        gpio_set_direction(BOOT_BUTTON_GPIO, GPIO_MODE_INPUT);
+        gpio_set_pull_mode(BOOT_BUTTON_GPIO, GPIO_PULLUP_ONLY);
+        ESP_LOGI(TAG, "GPIO0 (BOOT) configured with internal pull-up");
+        
         boot_button_.OnClick([this]() {
             auto& app = Application::GetInstance();
             ResetWifiConfiguration();
@@ -122,13 +133,39 @@ private:
     }
 
     void InitializePowerCtl() {
-        InitializeGPIO();
+        // ===== 电源控制初始化 - 适配您的板子 =====
+        // 注意：您的板子没有独立的MCU和外设电源控制引脚
+        // 这些功能可能通过其他方式实现，暂时跳过初始化
+        
+        // 如果定义了有效的电源控制引脚，则进行初始化
+        if (MCU_VCC_CTL != GPIO_NUM_NC) {
+            gpio_config_t io_conf_1 = {
+                .pin_bit_mask = (1ULL << MCU_VCC_CTL),
+                .mode = GPIO_MODE_OUTPUT,
+                .pull_up_en = GPIO_PULLUP_DISABLE,
+                .pull_down_en = GPIO_PULLDOWN_DISABLE,
+                .intr_type = GPIO_INTR_DISABLE
+            };
+            gpio_config(&io_conf_1);
+            // 移除有问题的gpio_hold_en调用
+            gpio_set_level(MCU_VCC_CTL, 1);
+        }
 
-        gpio_set_level(MCU_VCC_CTL, 1);
-        gpio_hold_en(MCU_VCC_CTL);
-
-        gpio_set_level(PERP_VCC_CTL, 1);
-        gpio_hold_en(PERP_VCC_CTL);
+        if (PERP_VCC_CTL != GPIO_NUM_NC) {
+            gpio_config_t io_conf_2 = {
+                .pin_bit_mask = (1ULL << PERP_VCC_CTL),
+                .mode = GPIO_MODE_OUTPUT,
+                .pull_up_en = GPIO_PULLUP_DISABLE,
+                .pull_down_en = GPIO_PULLDOWN_DISABLE,
+                .intr_type = GPIO_INTR_DISABLE
+            };
+            gpio_config(&io_conf_2);
+            // 移除有问题的gpio_hold_en调用
+            gpio_set_level(PERP_VCC_CTL, 1);
+        }
+        
+        ESP_LOGI(TAG, "Power control initialized (MCU_VCC_CTL: %d, PERP_VCC_CTL: %d)", 
+                 MCU_VCC_CTL, PERP_VCC_CTL);
     }
 
     void InitializeGPIO() {
@@ -189,10 +226,78 @@ private:
 
 public:
     EspSpotS3Bot() : boot_button_(BOOT_BUTTON_GPIO), key_button_(KEY_BUTTON_GPIO, true) {
-        InitializePowerCtl();
-        InitializeADC();
+        // ===== 最优先配置GPIO0，解决下载模式问题 =====
+        gpio_reset_pin(BOOT_BUTTON_GPIO);
+        gpio_set_direction(BOOT_BUTTON_GPIO, GPIO_MODE_INPUT);
+        gpio_set_pull_mode(BOOT_BUTTON_GPIO, GPIO_PULLUP_ONLY);
+        ESP_LOGI(TAG, "GPIO0 (BOOT) configured with internal pull-up - PRIORITY");
+        
+        // ===== 强制启用功放进行测试 =====
+        if (AUDIO_CODEC_PA_PIN != GPIO_NUM_NC) {
+            gpio_reset_pin(AUDIO_CODEC_PA_PIN);
+            gpio_set_direction(AUDIO_CODEC_PA_PIN, GPIO_MODE_OUTPUT);
+            gpio_set_level(AUDIO_CODEC_PA_PIN, 1);  // 强制启用功放 (NS4150B CTRL引脚需要高电平)
+            ESP_LOGI(TAG, "Forced PA enable - GPIO%d (PA_CTL) set to HIGH for NS4150B", AUDIO_CODEC_PA_PIN);
+            
+            // 验证功放状态
+            int pa_level = gpio_get_level(AUDIO_CODEC_PA_PIN);
+            ESP_LOGI(TAG, "PA level verification - GPIO%d level: %d", AUDIO_CODEC_PA_PIN, pa_level);
+        } else {
+            ESP_LOGW(TAG, "PA_PIN is GPIO_NUM_NC, no PA control available");
+        }
+        
+        // ===== 最小化启动负载，避免电源问题 =====
+        // 只初始化基本功能，延迟初始化耗电外设
         InitializeI2c();
-        InitializeButtons();
+        
+        ESP_LOGI(TAG, "ESP-Spot-S3 basic initialization completed");
+        
+        // 测试音频初始化
+        ESP_LOGI(TAG, "Testing audio initialization...");
+        auto* test_codec = GetAudioCodec();
+        if (test_codec) {
+            ESP_LOGI(TAG, "Audio codec created successfully: %p", test_codec);
+        } else {
+            ESP_LOGE(TAG, "Failed to create audio codec!");
+        }
+        
+        // 创建任务延迟初始化其他功能，避免阻塞主线程
+        xTaskCreate([](void* arg) {
+            auto* self = static_cast<EspSpotS3Bot*>(arg);
+            
+            // 等待系统稳定
+            vTaskDelay(pdMS_TO_TICKS(2000));
+            
+            // 重新配置GPIO0（确保不被Button覆盖）
+            gpio_reset_pin(BOOT_BUTTON_GPIO);
+            gpio_set_direction(BOOT_BUTTON_GPIO, GPIO_MODE_INPUT);
+            gpio_set_pull_mode(BOOT_BUTTON_GPIO, GPIO_PULLUP_ONLY);
+            ESP_LOGI(TAG, "GPIO0 re-configured after Button initialization");
+            
+            // 初始化按钮回调
+            self->InitializeButtons();
+            vTaskDelay(pdMS_TO_TICKS(500));
+            
+            // 初始化电源控制
+            self->InitializePowerCtl();
+            vTaskDelay(pdMS_TO_TICKS(1000));
+            
+            // 初始化ADC
+            self->InitializeADC();
+            
+            ESP_LOGI(TAG, "ESP-Spot-S3 peripheral initialization completed");
+            vTaskDelete(nullptr);
+        }, "init_task", 4096, this, 5, nullptr);
+    }
+
+    // ===== 强制进入配网模式 =====
+    virtual void StartNetwork() override {
+        ESP_LOGI(TAG, "ESP-Spot-S3 StartNetwork called - FORCE AP MODE");
+        
+        // 直接进入配网模式，不调用ResetWifiConfiguration
+        EnterWifiConfigMode();
+        
+        ESP_LOGI(TAG, "ESP-Spot-S3 StartNetwork completed - AP mode activated");
     }
 
     virtual Led* GetLed() override {
@@ -205,10 +310,27 @@ public:
             AUDIO_INPUT_SAMPLE_RATE, AUDIO_OUTPUT_SAMPLE_RATE, AUDIO_I2S_GPIO_MCLK, AUDIO_I2S_GPIO_BCLK,
             AUDIO_I2S_GPIO_WS, AUDIO_I2S_GPIO_DOUT, AUDIO_I2S_GPIO_DIN, AUDIO_CODEC_PA_PIN,
             AUDIO_CODEC_ES8311_ADDR, false);
+        ESP_LOGI(TAG, "GetAudioCodec called - ES8311 initialized with I2C bus: %p", i2c_bus_);
+        ESP_LOGI(TAG, "Audio pins - MCLK: GPIO%d, BCLK: GPIO%d, WS: GPIO%d, DOUT: GPIO%d, DIN: GPIO%d", 
+                 AUDIO_I2S_GPIO_MCLK, AUDIO_I2S_GPIO_BCLK, AUDIO_I2S_GPIO_WS, AUDIO_I2S_GPIO_DOUT, AUDIO_I2S_GPIO_DIN);
+        ESP_LOGI(TAG, "Audio codec - PA_PIN: GPIO%d, I2C_SDA: GPIO%d, I2C_SCL: GPIO%d", 
+                 AUDIO_CODEC_PA_PIN, AUDIO_CODEC_I2C_SDA_PIN, AUDIO_CODEC_I2C_SCL_PIN);
+        
+        // 测试音频输出
+        ESP_LOGI(TAG, "Testing audio output - enabling output and setting volume");
+        audio_codec.EnableOutput(true);
+        audio_codec.SetOutputVolume(80);  // 设置80%音量
+        
+        // 测试音频输入 - 启用麦克风
+        ESP_LOGI(TAG, "Testing audio input - enabling microphone input");
+        audio_codec.EnableInput(true);
+        
+        ESP_LOGI(TAG, "Audio test completed - output enabled, volume set to 80, input enabled");
+        
         return &audio_codec;
     }
 
-    virtual bool GetBatteryLevel(int &level, bool &charging, bool &discharging) {
+    virtual bool GetBatteryLevel(int &level, bool &charging, bool &discharging) override {
         if (!adc1_handle) {
             InitializeADC();
         }
@@ -220,7 +342,7 @@ public:
 
         if (do_calibration) {
             ESP_ERROR_CHECK(adc_cali_raw_to_voltage(adc1_cali_handle, raw_value, &voltage));
-            voltage = voltage * 3 / 2; // compensate for voltage divider
+            voltage = voltage * 3 / 2; // compensate for voltage divider (100k/200k)
             ESP_LOGI(TAG, "Calibrated voltage: %d mV", voltage);
         } else {
             ESP_LOGI(TAG, "Raw ADC value: %d", raw_value);
@@ -233,7 +355,12 @@ public:
         // 计算电量百分比
         level = (voltage - EMPTY_BATTERY_VOLTAGE) * 100 / (FULL_BATTERY_VOLTAGE - EMPTY_BATTERY_VOLTAGE);
 
-        charging = gpio_get_level(MCU_VCC_CTL);
+        // ===== 充电状态检测 - 适配您的板子 =====
+        // 注意：您的板子没有独立的充电状态检测引脚
+        // 暂时设置为固定值
+        charging = false;  // 您的板子没有充电状态检测
+        discharging = true; // 假设正在放电
+        
         ESP_LOGI(TAG, "Battery Level: %d%%, Charging: %s", level, charging ? "Yes" : "No");
         return true;
     }

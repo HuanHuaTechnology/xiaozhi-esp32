@@ -6,6 +6,7 @@
 #include "font_awesome_symbols.h"
 #include "settings.h"
 #include "assets/lang_config.h"
+#include "wifi_config_api.h"
 
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
@@ -22,9 +23,20 @@ static const char *TAG = "WifiBoard";
 WifiBoard::WifiBoard() {
     Settings settings("wifi", true);
     wifi_config_mode_ = settings.GetInt("force_ap") == 1;
+    ESP_LOGI(TAG, "WifiBoard constructor: force_ap=%d, wifi_config_mode_=%s", 
+             settings.GetInt("force_ap"), wifi_config_mode_ ? "true" : "false");
+    
     if (wifi_config_mode_) {
         ESP_LOGI(TAG, "force_ap is set to 1, reset to 0");
         settings.SetInt("force_ap", 0);
+    }
+    
+    // 初始化SsidManager并检查配置
+    auto& ssid_manager = SsidManager::GetInstance();
+    auto ssid_list = ssid_manager.GetSsidList();
+    ESP_LOGI(TAG, "WifiBoard constructor: loaded %d WiFi configurations", ssid_list.size());
+    for (int i = 0; i < ssid_list.size(); i++) {
+        ESP_LOGI(TAG, "  SSID %d: %s", i, ssid_list[i].ssid.c_str());
     }
 }
 
@@ -38,18 +50,24 @@ void WifiBoard::EnterWifiConfigMode() {
 
     auto& wifi_ap = WifiConfigurationAp::GetInstance();
     wifi_ap.SetLanguage(Lang::CODE);
-    wifi_ap.SetSsidPrefix("Xiaozhi");
+    // 使用新的前缀避免手机缓存旧的开放式网络导致密码校验失败
+    wifi_ap.SetSsidPrefix("XiaozhiSec");
+    // 设置 WPA2 加密与固定信道，提升手机兼容性
+    wifi_ap.SetSecurityWpa2("88888888");
+    wifi_ap.SetChannel(6);
     wifi_ap.Start();
 
-    // 显示 WiFi 配置 AP 的 SSID 和 Web 服务器 URL
+    // 仅使用配网Portal自带的Web服务器（80端口），不再启动第二个API服务器
+
+    // 显示 WiFi 配置 AP 的 SSID 和 API 服务器 URL
     std::string hint = Lang::Strings::CONNECT_TO_HOTSPOT;
     hint += wifi_ap.GetSsid();
-    hint += Lang::Strings::ACCESS_VIA_BROWSER;
-    hint += wifi_ap.GetWebServerUrl();
-    hint += "\n\n";
+    hint += "\nAPI服务器: http://192.168.4.1\n";
+    hint += "或使用小程序扫描二维码配置\n\n";
     
     // 播报配置 WiFi 的提示
-    application.Alert(Lang::Strings::WIFI_CONFIG_MODE, hint.c_str(), "", Lang::Sounds::P3_WIFICONFIG);
+    // 配网阶段不播放提示音，避免触发音频路径与额外负载
+    application.Alert(Lang::Strings::WIFI_CONFIG_MODE, hint.c_str(), "", "");
 
     #if CONFIG_USE_ACOUSTIC_WIFI_PROVISIONING
     auto display = Board::GetInstance().GetDisplay();

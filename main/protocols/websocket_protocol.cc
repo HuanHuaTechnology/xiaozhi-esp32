@@ -84,6 +84,32 @@ bool WebsocketProtocol::OpenAudioChannel() {
     std::string url = settings.GetString("url");
     std::string token = settings.GetString("token");
     int version = settings.GetInt("version");
+    
+    ESP_LOGI(TAG, "WebSocket config - URL: '%s', Token: '%s', Version: %d", 
+             url.c_str(), token.c_str(), version);
+    
+    // 如果OTA配置为空，尝试使用fallback配置
+    if (url.empty()) {
+#ifdef CONFIG_USE_FALLBACK_WEBSOCKET
+        ESP_LOGW(TAG, "OTA WebSocket config is empty, trying fallback configuration");
+        url = CONFIG_FALLBACK_WEBSOCKET_URL;
+        token = CONFIG_FALLBACK_WEBSOCKET_TOKEN;
+        version = CONFIG_FALLBACK_WEBSOCKET_VERSION;
+        ESP_LOGI(TAG, "Fallback WebSocket config - URL: '%s', Token: '%s', Version: %d", 
+                 url.c_str(), token.c_str(), version);
+#else
+        ESP_LOGE(TAG, "WebSocket URL is empty! Cannot connect to server.");
+        ESP_LOGE(TAG, "Enable CONFIG_USE_FALLBACK_WEBSOCKET in menuconfig to use fallback configuration.");
+        return false;
+#endif
+    }
+    
+    // 如果fallback配置也为空，则无法连接
+    if (url.empty()) {
+        ESP_LOGE(TAG, "Both OTA and fallback WebSocket URLs are empty! Cannot connect to server.");
+        return false;
+    }
+    
     if (version != 0) {
         version_ = version;
     }

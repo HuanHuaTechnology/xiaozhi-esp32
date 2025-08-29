@@ -45,8 +45,10 @@ void AudioService::Initialize(AudioCodec* codec) {
 
 #if CONFIG_USE_AUDIO_PROCESSOR
     audio_processor_ = std::make_unique<AfeAudioProcessor>();
+    ESP_LOGI(TAG, "Created AfeAudioProcessor: %p", audio_processor_.get());
 #else
     audio_processor_ = std::make_unique<NoAudioProcessor>();
+    ESP_LOGI(TAG, "Created NoAudioProcessor: %p", audio_processor_.get());
 #endif
 
 #if CONFIG_USE_AFE_WAKE_WORD
@@ -493,11 +495,17 @@ void AudioService::EnableWakeWordDetection(bool enable) {
 }
 
 void AudioService::EnableVoiceProcessing(bool enable) {
-    ESP_LOGD(TAG, "%s voice processing", enable ? "Enabling" : "Disabling");
+    ESP_LOGI(TAG, "%s voice processing, audio_processor_: %p", enable ? "Enabling" : "Disabling", audio_processor_.get());
     if (enable) {
         if (!audio_processor_initialized_) {
-            audio_processor_->Initialize(codec_, OPUS_FRAME_DURATION_MS);
-            audio_processor_initialized_ = true;
+            if (audio_processor_) {
+                audio_processor_->Initialize(codec_, OPUS_FRAME_DURATION_MS);
+                audio_processor_initialized_ = true;
+                ESP_LOGI(TAG, "Audio processor initialized successfully");
+            } else {
+                ESP_LOGE(TAG, "Audio processor is null, cannot initialize");
+                return;
+            }
         }
 
         /* We should make sure no audio is playing */
@@ -506,7 +514,9 @@ void AudioService::EnableVoiceProcessing(bool enable) {
         audio_processor_->Start();
         xEventGroupSetBits(event_group_, AS_EVENT_AUDIO_PROCESSOR_RUNNING);
     } else {
-        audio_processor_->Stop();
+        if (audio_processor_) {
+            audio_processor_->Stop();
+        }
         xEventGroupClearBits(event_group_, AS_EVENT_AUDIO_PROCESSOR_RUNNING);
     }
 }

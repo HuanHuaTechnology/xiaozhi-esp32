@@ -333,10 +333,7 @@ void Application::Start() {
     /* Setup the display */
     auto display = board.GetDisplay();
 
-    /* Setup the audio service */
-    auto codec = board.GetAudioCodec();
-    audio_service_.Initialize(codec);
-    audio_service_.Start();
+    /* 配网阶段彻底不触碰音频编解码器，等网络音频通道建立后再获取 */
 
     AudioServiceCallbacks callbacks;
     callbacks.on_send_queue_available = [this]() {
@@ -371,11 +368,14 @@ void Application::Start() {
 
     if (ota.HasMqttConfig()) {
         protocol_ = std::make_unique<MqttProtocol>();
+        ESP_LOGI(TAG, "Using MQTT protocol");
     } else if (ota.HasWebsocketConfig()) {
         protocol_ = std::make_unique<WebsocketProtocol>();
+        ESP_LOGI(TAG, "Using WebSocket protocol");
     } else {
         ESP_LOGW(TAG, "No protocol specified in the OTA config, using MQTT");
         protocol_ = std::make_unique<MqttProtocol>();
+        ESP_LOGI(TAG, "Using default MQTT protocol");
     }
 
     protocol_->OnNetworkError([this](const std::string& message) {
@@ -387,12 +387,25 @@ void Application::Start() {
             audio_service_.PushPacketToDecodeQueue(std::move(packet));
         }
     });
-    protocol_->OnAudioChannelOpened([this, codec, &board]() {
+    protocol_->OnAudioChannelOpened([this, &board]() {
+        ESP_LOGI(TAG, "Audio channel opened - initializing audio service");
         board.SetPowerSaveMode(false);
+        // 初始化并启动音频服务（仅在网络音频通道可用后）
+        auto codec = Board::GetInstance().GetAudioCodec();
+        ESP_LOGI(TAG, "Audio codec obtained: %p", codec);
+        audio_service_.Initialize(codec);
+        ESP_LOGI(TAG, "Audio service initialized");
         if (protocol_->server_sample_rate() != codec->output_sample_rate()) {
             ESP_LOGW(TAG, "Server sample rate %d does not match device output sample rate %d, resampling may cause distortion",
                 protocol_->server_sample_rate(), codec->output_sample_rate());
         }
+        audio_service_.Start();
+        ESP_LOGI(TAG, "Audio service started");
+        
+        // 音频服务初始化完成后播放成功音效
+        ESP_LOGI(TAG, "Playing success sound");
+        audio_service_.PlaySound(Lang::Sounds::P3_SUCCESS);
+        ESP_LOGI(TAG, "Success sound played");
     });
     protocol_->OnAudioChannelClosed([this, &board]() {
         board.SetPowerSaveMode(true);
@@ -492,6 +505,7 @@ void Application::Start() {
         }
     });
     bool protocol_started = protocol_->Start();
+    ESP_LOGI(TAG, "Protocol started: %s", protocol_started ? "true" : "false");
 
     SetDeviceState(kDeviceStateIdle);
 
@@ -500,8 +514,18 @@ void Application::Start() {
         std::string message = std::string(Lang::Strings::VERSION) + ota.GetCurrentVersion();
         display->ShowNotification(message.c_str());
         display->SetChatMessage("system", "");
-        // Play the success sound to indicate the device is ready
-        audio_service_.PlaySound(Lang::Sounds::P3_SUCCESS);
+        ESP_LOGI(TAG, "Protocol started successfully, waiting for audio channel to open...");
+        
+        // 主动打开音频通道，而不是等待唤醒词
+        ESP_LOGI(TAG, "Opening audio channel...");
+        if (protocol_->OpenAudioChannel()) {
+            ESP_LOGI(TAG, "Audio channel opened successfully");
+        } else {
+            ESP_LOGE(TAG, "Failed to open audio channel");
+        }
+        // 成功音效现在在音频通道打开后播放
+    } else {
+        ESP_LOGE(TAG, "Protocol failed to start!");
     }
 
     // Print heap stats
