@@ -19,24 +19,24 @@
 
 #define TAG "esp_spot_s3"
 
-bool button_released_ = false;
-bool shutdown_ready_ = false;
-esp_timer_handle_t shutdown_timer;
+static constexpr int VBAT_COMP_NUM = 3;
+static constexpr int VBAT_COMP_DEN = 2;
 
 class EspSpotS3Bot : public WifiBoard {
 private:
-    i2c_master_bus_handle_t i2c_bus_;
+    i2c_master_bus_handle_t i2c_bus_ = nullptr;
     Button boot_button_;
     Button key_button_;
-    adc_oneshot_unit_handle_t adc1_handle;
-    adc_cali_handle_t adc1_cali_handle;
+
+    adc_oneshot_unit_handle_t adc1_handle = nullptr;
+    adc_cali_handle_t adc1_cali_handle = nullptr;
     bool do_calibration = false;
+
     bool key_long_pressed = false;
     int64_t last_key_press_time = 0;
     static const int64_t LONG_PRESS_TIMEOUT_US = 5 * 1000000ULL;
 
     void InitializeI2c() {
-        // Initialize I2C peripheral
         i2c_master_bus_config_t i2c_bus_cfg = {
             .i2c_port = I2C_NUM_0,
             .sda_io_num = AUDIO_CODEC_I2C_SDA_PIN,
@@ -53,6 +53,8 @@ private:
     }
 
     void InitializeADC() {
+        if (adc1_handle) return;
+
         adc_oneshot_unit_init_cfg_t init_config1 = {
             .unit_id = ADC_UNIT_1
         };
@@ -78,8 +80,10 @@ private:
             do_calibration = true;
             adc1_cali_handle = handle;
             ESP_LOGI(TAG, "ADC Curve Fitting calibration succeeded");
+        } else {
+            ESP_LOGW(TAG, "ADC calibration not available, using raw reading.");
         }
-#endif // ADC_CALI_SCHEME_CURVE_FITTING_SUPPORTED
+#endif
     }
 
     void InitializeButtons() {
@@ -100,22 +104,21 @@ private:
 
             if (key_long_pressed) {
                 if ((now - last_key_press_time) < LONG_PRESS_TIMEOUT_US) {
-                    ESP_LOGW(TAG, "Key button long pressed the second time within 5s, shutting down...");
-                    led->SetSingleColor(0, {0, 0, 0});
+                    ESP_LOGW(TAG, "Second long press within 5s, shutting down...");
+                    if (led) led->SetSingleColor(0, {0, 0, 0});
 
+                    gpio_set_level(AUDIO_CODEC_PA_PIN, 0);
                     gpio_hold_dis(MCU_VCC_CTL);
                     gpio_set_level(MCU_VCC_CTL, 0);
-
                 } else {
                     last_key_press_time = now;
                     BlinkGreenFor5s();
                 }
                 key_long_pressed = true;
             } else {
-                ESP_LOGW(TAG, "Key button first long press! Waiting second within 5s to shutdown...");
+                ESP_LOGW(TAG, "First long press; long press again within 5s to shutdown...");
                 last_key_press_time = now;
                 key_long_pressed = true;
-
                 BlinkGreenFor5s();
             }
         });
@@ -140,7 +143,7 @@ private:
             .intr_type = GPIO_INTR_DISABLE
         };
         gpio_config(&io_pa);
-        gpio_set_level(AUDIO_CODEC_PA_PIN, 0);
+        gpio_set_level(AUDIO_CODEC_PA_PIN, 1);
 
         gpio_config_t io_conf_1 = {
             .pin_bit_mask = (1ULL << MCU_VCC_CTL),
@@ -163,9 +166,7 @@ private:
 
     void BlinkGreenFor5s() {
         auto* led = static_cast<CircularStrip*>(GetLed());
-        if (!led) {
-            return;
-        }
+        if (!led) return;
 
         led->Blink({50, 25, 0}, 100);
 
@@ -173,9 +174,7 @@ private:
             .callback = [](void* arg) {
                 auto* self = static_cast<EspSpotS3Bot*>(arg);
                 auto* led = static_cast<CircularStrip*>(self->GetLed());
-                if (led) {
-                    led->SetSingleColor(0, {0, 0, 0});
-                }
+                if (led) led->SetSingleColor(0, {0, 0, 0});
             },
             .arg = this,
             .dispatch_method = ESP_TIMER_TASK,
@@ -185,6 +184,10 @@ private:
         esp_timer_handle_t blink_timer = nullptr;
         ESP_ERROR_CHECK(esp_timer_create(&timer_args, &blink_timer));
         ESP_ERROR_CHECK(esp_timer_start_once(blink_timer, LONG_PRESS_TIMEOUT_US));
+    }
+
+    static int CompensateVBatMv(int mv) {
+        return mv * VBAT_COMP_NUM / VBAT_COMP_DEN;
     }
 
 public:
@@ -201,40 +204,44 @@ public:
     }
 
     virtual AudioCodec* GetAudioCodec() override {
-         static Es8311AudioCodec audio_codec(i2c_bus_, I2C_NUM_0,
-            AUDIO_INPUT_SAMPLE_RATE, AUDIO_OUTPUT_SAMPLE_RATE, AUDIO_I2S_GPIO_MCLK, AUDIO_I2S_GPIO_BCLK,
-            AUDIO_I2S_GPIO_WS, AUDIO_I2S_GPIO_DOUT, AUDIO_I2S_GPIO_DIN, AUDIO_CODEC_PA_PIN,
-            AUDIO_CODEC_ES8311_ADDR, false);
+        static Es8311AudioCodec audio_codec(
+            i2c_bus_, I2C_NUM_0,
+            AUDIO_INPUT_SAMPLE_RATE, AUDIO_OUTPUT_SAMPLE_RATE,
+            AUDIO_I2S_GPIO_MCLK, AUDIO_I2S_GPIO_BCLK,
+            AUDIO_I2S_GPIO_WS, AUDIO_I2S_GPIO_DOUT, AUDIO_I2S_GPIO_DIN,
+            AUDIO_CODEC_PA_PIN, AUDIO_CODEC_ES8311_ADDR, false
+        );
         return &audio_codec;
     }
 
-    virtual bool GetBatteryLevel(int &level, bool &charging, bool &discharging) {
+    virtual bool GetBatteryLevel(int &level, bool &charging, bool &discharging) override {
         if (!adc1_handle) {
             InitializeADC();
         }
 
         int raw_value = 0;
-        int voltage = 0;
+        int voltage_mv = 0;
 
         ESP_ERROR_CHECK(adc_oneshot_read(adc1_handle, VBAT_ADC_CHANNEL, &raw_value));
 
         if (do_calibration) {
-            ESP_ERROR_CHECK(adc_cali_raw_to_voltage(adc1_cali_handle, raw_value, &voltage));
-            voltage = voltage * 3 / 2; // compensate for voltage divider
-            ESP_LOGI(TAG, "Calibrated voltage: %d mV", voltage);
+            ESP_ERROR_CHECK(adc_cali_raw_to_voltage(adc1_cali_handle, raw_value, &voltage_mv));
+            voltage_mv = CompensateVBatMv(voltage_mv);
+            ESP_LOGI(TAG, "VBAT(calibrated): %d mV", voltage_mv);
         } else {
-            ESP_LOGI(TAG, "Raw ADC value: %d", raw_value);
-            voltage = raw_value;
+            voltage_mv = raw_value;
+            ESP_LOGI(TAG, "VBAT(raw): %d", raw_value);
         }
 
-        voltage = voltage < EMPTY_BATTERY_VOLTAGE ? EMPTY_BATTERY_VOLTAGE : voltage;
-        voltage = voltage > FULL_BATTERY_VOLTAGE ? FULL_BATTERY_VOLTAGE : voltage;
+        if (voltage_mv < EMPTY_BATTERY_VOLTAGE) voltage_mv = EMPTY_BATTERY_VOLTAGE;
+        if (voltage_mv > FULL_BATTERY_VOLTAGE)  voltage_mv = FULL_BATTERY_VOLTAGE;
 
-        // 计算电量百分比
-        level = (voltage - EMPTY_BATTERY_VOLTAGE) * 100 / (FULL_BATTERY_VOLTAGE - EMPTY_BATTERY_VOLTAGE);
+        level = (voltage_mv - EMPTY_BATTERY_VOLTAGE) * 100 / (FULL_BATTERY_VOLTAGE - EMPTY_BATTERY_VOLTAGE);
 
         charging = gpio_get_level(MCU_VCC_CTL);
-        ESP_LOGI(TAG, "Battery Level: %d%%, Charging: %s", level, charging ? "Yes" : "No");
+        discharging = !charging;
+
+        ESP_LOGI(TAG, "Battery Level: %d%%, PowerHold(MCU_VCC_CTL): %s", level, charging ? "ON" : "OFF");
         return true;
     }
 };
