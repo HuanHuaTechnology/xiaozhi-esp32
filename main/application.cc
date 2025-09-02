@@ -420,6 +420,7 @@ void Application::Start() {
                         if (listening_mode_ == kListeningModeManualStop) {
                             SetDeviceState(kDeviceStateIdle);
                         } else {
+                            // 说话结束后直接转到Listening状态以保持持续对话
                             SetDeviceState(kDeviceStateListening);
                         }
                     }
@@ -604,9 +605,9 @@ void Application::OnWakeWordDetected() {
         }
         // Set the chat state to wake word detected
         protocol_->SendWakeWordDetected(wake_word);
-        SetListeningMode(aec_mode_ == kAecOff ? kListeningModeAutoStop : kListeningModeRealtime);
+        SetListeningMode(kListeningModeRealtime);
 #else
-        SetListeningMode(aec_mode_ == kAecOff ? kListeningModeAutoStop : kListeningModeRealtime);
+        SetListeningMode(kListeningModeRealtime);
         // Play the pop up sound to indicate the wake word is detected
         audio_service_.PlaySound(Lang::Sounds::OGG_POPUP);
 #endif

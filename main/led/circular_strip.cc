@@ -207,8 +207,15 @@ void CircularStrip::OnStateChanged() {
         }
         case kDeviceStateListening:
         case kDeviceStateAudioTesting: {
-            StripColor color = { default_brightness_, low_brightness_, low_brightness_ };
-            SetAllColor(color);
+            if (app.IsVoiceDetected()) {
+                // 检测到语音时显示亮蓝色
+                StripColor color = { low_brightness_, low_brightness_, default_brightness_ };
+                SetAllColor(color);
+            } else {
+                // 监听状态但未检测到语音时显示暗蓝色
+                StripColor color = { 0, 0, low_brightness_ };
+                SetAllColor(color);
+            }
             break;
         }
         case kDeviceStateSpeaking: {
