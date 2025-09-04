@@ -440,6 +440,81 @@ void Application::Start() {
                 ESP_LOGI(TAG, ">> %s", text->valuestring);
                 Schedule([this, display, message = std::string(text->valuestring)]() {
                     display->SetChatMessage("user", message.c_str());
+
+                    // (reverted) keyword-based interruption was here
+
+                    // Local on-device LED intents (fallback when server-side didn't call tools)
+                    auto handle_local_led = [](const std::string& msg) -> bool {
+                        std::string s = msg;
+                        for (auto &ch : s) ch = static_cast<char>(tolower((unsigned char)ch));
+                        auto contains = [&s](const char* k){ return s.find(k) != std::string::npos; };
+
+                        auto call_tool = [](const char* name, int r=-1,int g=-1,int b=-1){
+                            cJSON* root = cJSON_CreateObject();
+                            cJSON_AddStringToObject(root, "jsonrpc", "2.0");
+                            cJSON_AddNumberToObject(root, "id", (int)esp_timer_get_time());
+                            cJSON_AddStringToObject(root, "method", "tools/call");
+                            cJSON* params = cJSON_CreateObject();
+                            cJSON_AddStringToObject(params, "name", name);
+                            cJSON* args = cJSON_CreateObject();
+                            if (r>=0) { cJSON_AddNumberToObject(args, "red", r); cJSON_AddNumberToObject(args, "green", g); cJSON_AddNumberToObject(args, "blue", b); }
+                            cJSON_AddItemToObject(params, "arguments", args);
+                            cJSON_AddNumberToObject(params, "stackSize", 4096);
+                            cJSON_AddItemToObject(root, "params", params);
+                            McpServer::GetInstance().ParseMessage(root);
+                            cJSON_Delete(root);
+                        };
+
+                        // Explicit lightstrip/RGB intents
+                        bool is_strip = contains("灯带") || contains("rgb");
+                        bool is_open = contains("开") || contains("打开") || contains("开启") || contains("on");
+                        bool is_close = contains("关") || contains("关闭") || contains("off");
+
+                        if (is_strip && is_open) {
+                            // Max brightness then visible white
+                            // brightness
+                            {
+                                cJSON* root = cJSON_CreateObject();
+                                cJSON_AddStringToObject(root, "jsonrpc", "2.0");
+                                cJSON_AddNumberToObject(root, "id", (int)esp_timer_get_time());
+                                cJSON_AddStringToObject(root, "method", "tools/call");
+                                cJSON* params = cJSON_CreateObject();
+                                cJSON_AddStringToObject(params, "name", "self.led_strip.set_brightness");
+                                cJSON* args = cJSON_CreateObject();
+                                cJSON_AddNumberToObject(args, "level", 8);
+                                cJSON_AddItemToObject(params, "arguments", args);
+                                cJSON_AddNumberToObject(params, "stackSize", 4096);
+                                cJSON_AddItemToObject(root, "params", params);
+                                McpServer::GetInstance().ParseMessage(root);
+                                cJSON_Delete(root);
+                            }
+                            call_tool("self.led_strip.set_all_color", 64,64,64);
+                            return true;
+                        }
+                        if (is_strip && is_close) {
+                            call_tool("self.led_strip.set_all_color", 0,0,0);
+                            return true;
+                        }
+
+                        // Generic light on/off -> warm LED only
+                        if (contains("开灯") || contains("灯打开") || contains("turn on the light") || contains("lights on")) {
+                            call_tool("self.warm_led.on");
+                            return true;
+                        }
+                        if (contains("关灯") || contains("关闭灯") || contains("灯关上") || contains("turn off the light") || contains("lights off")) {
+                            call_tool("self.warm_led.off");
+                            return true;
+                        }
+                        struct C { const char* k; int r,g,b; } cs[]={{"红",64,0,0},{"绿",0,64,0},{"蓝",0,0,64},{"白",48,48,48}};
+                        for (auto &c: cs) {
+                            if (s.find(c.k)!=std::string::npos) {
+                                call_tool("self.led_strip.set_all_color", c.r,c.g,c.b);
+                                return true;
+                            }
+                        }
+                        return false;
+                    };
+                    (void)handle_local_led(message);
                 });
             }
         } else if (strcmp(type->valuestring, "llm") == 0) {

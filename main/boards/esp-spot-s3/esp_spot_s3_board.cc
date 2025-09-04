@@ -16,6 +16,8 @@
 #include <driver/gpio.h>
 #include "esp_timer.h"
 #include "led/circular_strip.h"
+#include "warm_led_control.h"
+#include "led_strip_control.h"
 
 #define TAG "esp_spot_s3"
 
@@ -199,8 +201,10 @@ public:
     }
 
     virtual Led* GetLed() override {
-        static CircularStrip led(LED_PIN, 1);
-        return &led;
+        static CircularStrip rgb_strip(LED_PIN, 8);
+        static LedStripControl controller(&rgb_strip);
+        static WarmLedControl warm_led(WARM_LED_POWER_PIN, WARM_LED_CONTROL_PIN);
+        return &rgb_strip;
     }
 
     virtual AudioCodec* GetAudioCodec() override {

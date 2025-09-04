@@ -20,12 +20,16 @@
 #define AUDIO_CODEC_ES8311_ADDR  ES8311_CODEC_DEFAULT_ADDR
 
 #define BOOT_BUTTON_GPIO         GPIO_NUM_0
-#define KEY_BUTTON_GPIO          GPIO_NUM_12
-#define LED_PIN                  GPIO_NUM_11
+#define KEY_BUTTON_GPIO          GPIO_NUM_4
+#define LED_PIN                  GPIO_NUM_7
 
 #define VBAT_ADC_CHANNEL         ADC_CHANNEL_9  // S3: IO10
 #define MCU_VCC_CTL              GPIO_NUM_4     // set 1 to power on MCU
 #define PERP_VCC_CTL             GPIO_NUM_6     // set 1 to power on peripherals
+
+// Warm white LED group (LED2-LED9)
+#define WARM_LED_POWER_PIN       GPIO_NUM_12
+#define WARM_LED_CONTROL_PIN     GPIO_NUM_13
 
 #define ADC_ATTEN                ADC_ATTEN_DB_12
 #define ADC_WIDTH                ADC_BITWIDTH_DEFAULT
