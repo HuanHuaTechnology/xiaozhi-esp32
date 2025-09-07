@@ -16,6 +16,9 @@
 #include <wifi_configuration_ap.h>
 #include <ssid_manager.h>
 #include "afsk_demod.h"
+#if CONFIG_ENABLE_BLE_PROVISIONING
+#include "protocols/ble_provisioning.h"
+#endif
 
 static const char *TAG = "WifiBoard";
 
@@ -50,6 +53,11 @@ void WifiBoard::EnterWifiConfigMode() {
     
     // 播报配置 WiFi 的提示
     application.Alert(Lang::Strings::WIFI_CONFIG_MODE, hint.c_str(), "", Lang::Sounds::OGG_WIFICONFIG);
+
+#if CONFIG_ENABLE_BLE_PROVISIONING
+    // 启动 BLE 配网
+    BleProvisioning::Start();
+#endif
 
     #if CONFIG_USE_ACOUSTIC_WIFI_PROVISIONING
     auto display = Board::GetInstance().GetDisplay();

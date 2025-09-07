@@ -59,6 +59,15 @@ choice
         bool "Romanian"
 endchoice
 
+config ENABLE_BLE_PROVISIONING
+    bool "Enable BLE provisioning via GATT"
+    depends on BT_ENABLED
+    default n
+    help
+        Start a BLE GATT server in WiFi configuration mode. A WeChat Mini Program can
+        connect and write "SSID\nPASSWORD" to provision WiFi. When credentials are valid,
+        they are saved and the device reboots to connect.
+
 choice BOARD_TYPE
     prompt "Board Type"
     default BOARD_TYPE_BREAD_COMPACT_WIFI
