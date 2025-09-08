@@ -345,7 +345,15 @@ void Application::Start() {
     callbacks.on_wake_word_detected = [this](const std::string& wake_word) {
         xEventGroupSetBits(event_group_, MAIN_EVENT_WAKE_WORD_DETECTED);
     };
+    // Reduce realtime interruption sensitivity with a small cooldown
+    static uint32_t last_vad_change_ms = 0;
+    static const uint32_t MIN_INTERVAL_MS = 300; // ignore rapid toggles within 300ms
     callbacks.on_vad_change = [this](bool speaking) {
+        uint32_t now = (uint32_t)(esp_timer_get_time() / 1000ULL);
+        if (now - last_vad_change_ms < MIN_INTERVAL_MS) {
+            return;
+        }
+        last_vad_change_ms = now;
         xEventGroupSetBits(event_group_, MAIN_EVENT_VAD_CHANGE);
     };
     audio_service_.SetCallbacks(callbacks);
@@ -383,7 +391,8 @@ void Application::Start() {
         xEventGroupSetBits(event_group_, MAIN_EVENT_ERROR);
     });
     protocol_->OnIncomingAudio([this](std::unique_ptr<AudioStreamPacket> packet) {
-        if (device_state_ == kDeviceStateSpeaking) {
+        // Accept audio if speaking OR a TTS session is active to avoid race dropping
+        if (device_state_ == kDeviceStateSpeaking || tts_active_) {
             audio_service_.PushPacketToDecodeQueue(std::move(packet));
         }
     });
@@ -410,12 +419,16 @@ void Application::Start() {
             if (strcmp(state->valuestring, "start") == 0) {
                 Schedule([this]() {
                     aborted_ = false;
+                    tts_active_ = true;
+                    last_tts_event_us_ = esp_timer_get_time();
                     if (device_state_ == kDeviceStateIdle || device_state_ == kDeviceStateListening) {
                         SetDeviceState(kDeviceStateSpeaking);
                     }
                 });
             } else if (strcmp(state->valuestring, "stop") == 0) {
                 Schedule([this]() {
+                    tts_active_ = false;
+                    last_tts_event_us_ = esp_timer_get_time();
                     if (device_state_ == kDeviceStateSpeaking) {
                         if (listening_mode_ == kListeningModeManualStop) {
                             SetDeviceState(kDeviceStateIdle);
@@ -433,6 +446,8 @@ void Application::Start() {
                         display->SetChatMessage("assistant", message.c_str());
                     });
                 }
+                // refresh tts activity
+                last_tts_event_us_ = esp_timer_get_time();
             }
         } else if (strcmp(type->valuestring, "stt") == 0) {
             auto text = cJSON_GetObjectItem(root, "text");
@@ -521,6 +536,18 @@ void Application::OnClockTimer() {
         // SystemInfo::PrintTaskList();
         SystemInfo::PrintHeapStats();
     }
+
+    // Fallback: if speaking but no playback for a while and no stop received, auto resume listening
+    if (device_state_ == kDeviceStateSpeaking) {
+        uint32_t ms_since_playback = audio_service_.MsSinceLastPlayback();
+        if (ms_since_playback > 3000) { // >3s no playback
+            // Only fallback if we also haven't seen tts events recently
+            uint64_t now_us = esp_timer_get_time();
+            if (!tts_active_ || (now_us - last_tts_event_us_) > 3000000ULL) {
+                SetDeviceState(kDeviceStateListening);
+            }
+        }
+    }
 }
 
 // Add a async task to MainLoop
@@ -566,6 +593,14 @@ void Application::MainEventLoop() {
             if (device_state_ == kDeviceStateListening) {
                 auto led = Board::GetInstance().GetLed();
                 led->OnStateChanged();
+            } else if (device_state_ == kDeviceStateSpeaking) {
+                // Realtime barge-in: if user speaks while TTS is playing, interrupt after guard window
+                if (audio_service_.IsVoiceDetected()) {
+                    uint64_t now_us = esp_timer_get_time();
+                    if (now_us - speaking_start_us_ > 600000ULL) {
+                        AbortSpeaking(kAbortReasonNone);
+                    }
+                }
             }
         }
 
@@ -612,6 +647,11 @@ void Application::OnWakeWordDetected() {
         audio_service_.PlaySound(Lang::Sounds::OGG_POPUP);
 #endif
     } else if (device_state_ == kDeviceStateSpeaking) {
+        // Guard: ignore wake word triggers shortly after TTS starts to avoid self-interruption
+        uint64_t now_us = esp_timer_get_time();
+        if (now_us - speaking_start_us_ < 600000ULL) { // 600ms guard window
+            return;
+        }
         AbortSpeaking(kAbortReasonWakeWordDetected);
     } else if (device_state_ == kDeviceStateActivating) {
         SetDeviceState(kDeviceStateIdle);
@@ -653,11 +693,13 @@ void Application::SetDeviceState(DeviceState state) {
             display->SetEmotion("neutral");
             audio_service_.EnableVoiceProcessing(false);
             audio_service_.EnableWakeWordDetection(true);
+            audio_service_.PausePowerSaver(false);
             break;
         case kDeviceStateConnecting:
             display->SetStatus(Lang::Strings::CONNECTING);
             display->SetEmotion("neutral");
             display->SetChatMessage("system", "");
+            audio_service_.PausePowerSaver(false);
             break;
         case kDeviceStateListening:
             display->SetStatus(Lang::Strings::LISTENING);
@@ -670,19 +712,17 @@ void Application::SetDeviceState(DeviceState state) {
                 audio_service_.EnableVoiceProcessing(true);
                 audio_service_.EnableWakeWordDetection(false);
             }
+            audio_service_.PausePowerSaver(false);
             break;
         case kDeviceStateSpeaking:
             display->SetStatus(Lang::Strings::SPEAKING);
-
-            if (listening_mode_ != kListeningModeRealtime) {
-                audio_service_.EnableVoiceProcessing(false);
-                // Only AFE wake word can be detected in speaking mode
-#if CONFIG_USE_AFE_WAKE_WORD
-                audio_service_.EnableWakeWordDetection(true);
-#else
-                audio_service_.EnableWakeWordDetection(false);
-#endif
-            }
+            // Keep voice processing ON for realtime barge-in, but disable wake word to avoid self trigger
+            audio_service_.EnableVoiceProcessing(true);
+            audio_service_.EnableWakeWordDetection(false);
+            // Pause power saver while speaking, resume when leaving speaking
+            audio_service_.PausePowerSaver(true);
+            // mark speaking start to guard against self-interrupt via wake word
+            speaking_start_us_ = esp_timer_get_time();
             audio_service_.ResetDecoder();
             break;
         default:

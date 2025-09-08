@@ -225,6 +225,11 @@ file(GLOB BOARD_SOURCES
 )
 list(APPEND SOURCES ${BOARD_SOURCES})
 
+# Ensure new warm LED MCP source is included for esp-spot-s3
+if(BOARD_TYPE STREQUAL "esp-spot-s3")
+    list(APPEND SOURCES "boards/esp-spot-s3/warm_led_mcp.cc")
+endif()
+
 if(CONFIG_USE_AUDIO_PROCESSOR)
     list(APPEND SOURCES "audio/processors/afe_audio_processor.cc")
 else()

@@ -42,7 +42,7 @@
 #define AUDIO_TESTING_MAX_DURATION_MS 10000
 #define MAX_TIMESTAMPS_IN_QUEUE 3
 
-#define AUDIO_POWER_TIMEOUT_MS 15000
+#define AUDIO_POWER_TIMEOUT_MS 60000
 #define AUDIO_POWER_CHECK_INTERVAL_MS 1000
 
 
@@ -106,6 +106,8 @@ public:
     void PlaySound(const std::string_view& sound);
     bool ReadAudioData(std::vector<int16_t>& data, int sample_rate, int samples);
     void ResetDecoder();
+    uint32_t MsSinceLastPlayback();
+    void PausePowerSaver(bool pause);
 
 private:
     AudioCodec* codec_ = nullptr;
@@ -143,6 +145,7 @@ private:
     bool audio_input_need_warmup_ = false;
 
     esp_timer_handle_t audio_power_timer_ = nullptr;
+    bool power_saver_paused_ = false;
     std::chrono::steady_clock::time_point last_input_time_;
     std::chrono::steady_clock::time_point last_output_time_;
 

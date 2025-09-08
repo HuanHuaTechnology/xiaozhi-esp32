@@ -80,6 +80,11 @@ private:
     bool aborted_ = false;
     int clock_ticks_ = 0;
     TaskHandle_t check_new_version_task_handle_ = nullptr;
+    uint64_t speaking_start_us_ = 0;
+    uint64_t last_playback_us_ = 0;
+    // Track TTS lifecycle to handle server-side inconsistencies
+    bool tts_active_ = false;
+    uint64_t last_tts_event_us_ = 0;
 
     void OnWakeWordDetected();
     void CheckNewVersion(Ota& ota);

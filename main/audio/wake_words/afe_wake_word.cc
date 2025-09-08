@@ -45,17 +45,50 @@ bool AfeWakeWord::Initialize(AudioCodec* codec) {
         ESP_LOGE(TAG, "Failed to initialize wakenet model");
         return false;
     }
+    int chosen_index = -1;
+    int fallback_index = -1;
     for (int i = 0; i < models_->num; i++) {
         ESP_LOGI(TAG, "Model %d: %s", i, models_->model_name[i]);
         if (strstr(models_->model_name[i], ESP_WN_PREFIX) != NULL) {
-            wakenet_model_ = models_->model_name[i];
-            auto words = esp_srmodel_get_wake_words(models_, wakenet_model_);
-            // split by ";" to get all wake words
-            std::stringstream ss(words);
-            std::string word;
-            while (std::getline(ss, word, ';')) {
-                wake_words_.push_back(word);
+            if (fallback_index == -1) fallback_index = i;
+
+            // Prefer model that contains "你好乐鑫" or name hints "hilexin/lexin"
+            char* candidate = models_->model_name[i];
+            auto words = esp_srmodel_get_wake_words(models_, candidate);
+            bool match = false;
+            {
+                std::stringstream ss(words);
+                std::string word;
+                while (std::getline(ss, word, ';')) {
+                    if (word.find("你好乐鑫") != std::string::npos) { match = true; break; }
+                }
             }
+            if (!match) {
+                std::string n(candidate);
+                for (auto &c : n) c = (char)tolower((unsigned char)c);
+                if (n.find("hilexin") != std::string::npos || n.find("lexin") != std::string::npos) {
+                    match = true;
+                }
+            }
+            if (match) {
+                chosen_index = i;
+                break;
+            }
+        }
+    }
+
+    int use_index = (chosen_index != -1) ? chosen_index : fallback_index;
+    if (use_index == -1) {
+        ESP_LOGE(TAG, "No WakeNet model found");
+        return false;
+    }
+    wakenet_model_ = models_->model_name[use_index];
+    {
+        auto words = esp_srmodel_get_wake_words(models_, wakenet_model_);
+        std::stringstream ss(words);
+        std::string word;
+        while (std::getline(ss, word, ';')) {
+            wake_words_.push_back(word);
         }
     }
 

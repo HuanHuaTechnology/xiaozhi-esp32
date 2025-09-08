@@ -16,6 +16,7 @@
 #include <driver/gpio.h>
 #include "esp_timer.h"
 #include "led/circular_strip.h"
+#include "warm_led_mcp.h"
 
 #define TAG "esp_spot_s3"
 
@@ -196,6 +197,8 @@ public:
         InitializeADC();
         InitializeI2c();
         InitializeButtons();
+        // Register warm LED MCP tools if pins available
+        RegisterWarmLedTools();
     }
 
     virtual Led* GetLed() override {

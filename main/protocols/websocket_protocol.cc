@@ -8,6 +8,7 @@
 #include <cJSON.h>
 #include <esp_log.h>
 #include <arpa/inet.h>
+#include <esp_app_desc.h>
 #include "assets/lang_config.h"
 
 #define TAG "WS"
@@ -88,6 +89,19 @@ bool WebsocketProtocol::OpenAudioChannel() {
         version_ = version;
     }
 
+    // Force to production WSS endpoint if empty, insecure (ws), or not our domain
+    if (url.empty() || url.rfind("wss://", 0) != 0 || url.find("hmbbserver.top") == std::string::npos) {
+        const std::string default_url = "wss://hmbbserver.top/xiaozhi/v1/";
+        ESP_LOGW(TAG, "WebSocket URL missing/insecure or mismatched, using default: %s", default_url.c_str());
+        url = default_url;
+        Settings ws_rw("websocket", true);
+        ws_rw.SetString("url", url);
+        if (version_ == 0) {
+            ws_rw.SetInt("version", 1);
+            version_ = 1;
+        }
+    }
+
     error_occurred_ = false;
 
     auto network = Board::GetInstance().GetNetwork();
@@ -107,6 +121,13 @@ bool WebsocketProtocol::OpenAudioChannel() {
     websocket_->SetHeader("Protocol-Version", std::to_string(version_).c_str());
     websocket_->SetHeader("Device-Id", SystemInfo::GetMacAddress().c_str());
     websocket_->SetHeader("Client-Id", Board::GetInstance().GetUuid().c_str());
+    // Add headers required by reverse proxy / WSS checks
+    websocket_->SetHeader("Origin", "https://hmbbserver.top");
+    if (url.find("hmbbserver.top") != std::string::npos) {
+        websocket_->SetHeader("Host", "hmbbserver.top");
+    }
+    // Optional subprotocol hint for some gateways
+    websocket_->SetHeader("Sec-WebSocket-Protocol", "mcp");
 
     websocket_->OnData([this](const char* data, size_t len, bool binary) {
         if (binary) {
@@ -171,9 +192,28 @@ bool WebsocketProtocol::OpenAudioChannel() {
         }
     });
 
-    ESP_LOGI(TAG, "Connecting to websocket server: %s with version: %d", url.c_str(), version_);
-    if (!websocket_->Connect(url.c_str())) {
-        ESP_LOGE(TAG, "Failed to connect to websocket server");
+    auto try_connect = [this](const std::string& u) -> bool {
+        ESP_LOGI(TAG, "Connecting to websocket server: %s with version: %d", u.c_str(), version_);
+        if (u.find("hmbbserver.top") != std::string::npos) {
+            websocket_->SetHeader("Host", "hmbbserver.top");
+        }
+        return websocket_->Connect(u.c_str());
+    };
+
+    std::string u1 = url;
+    std::string u2 = url;
+    std::string u3 = url;
+    if (u2.find("/v1/") != std::string::npos) {
+        u2.replace(u2.find("/v1/"), 4, "/v2/");
+    }
+    if (!u3.empty() && u3.back() == '/') {
+        u3.pop_back();
+    } else if (!u3.empty()) {
+        u3.push_back('/');
+    }
+
+    if (!try_connect(u1) && !try_connect(u2) && !try_connect(u3)) {
+        ESP_LOGE(TAG, "Failed to connect to websocket server (all variants)");
         SetError(Lang::Strings::SERVER_NOT_CONNECTED);
         return false;
     }
@@ -204,13 +244,19 @@ std::string WebsocketProtocol::GetHelloMessage() {
     cJSON* root = cJSON_CreateObject();
     cJSON_AddStringToObject(root, "type", "hello");
     cJSON_AddNumberToObject(root, "version", version_);
+    cJSON_AddStringToObject(root, "transport", "websocket");
+    cJSON_AddStringToObject(root, "device_id", SystemInfo::GetMacAddress().c_str());
+    cJSON_AddStringToObject(root, "client_id", Board::GetInstance().GetUuid().c_str());
+    cJSON_AddStringToObject(root, "board", BOARD_NAME);
+    auto app_desc = esp_app_get_description();
+    cJSON_AddStringToObject(root, "app_version", app_desc ? app_desc->version : "");
+    cJSON_AddStringToObject(root, "language", Lang::CODE);
     cJSON* features = cJSON_CreateObject();
 #if CONFIG_USE_SERVER_AEC
     cJSON_AddBoolToObject(features, "aec", true);
 #endif
     cJSON_AddBoolToObject(features, "mcp", true);
     cJSON_AddItemToObject(root, "features", features);
-    cJSON_AddStringToObject(root, "transport", "websocket");
     cJSON* audio_params = cJSON_CreateObject();
     cJSON_AddStringToObject(audio_params, "format", "opus");
     cJSON_AddNumberToObject(audio_params, "sample_rate", 16000);

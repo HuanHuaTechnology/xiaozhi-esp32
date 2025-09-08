@@ -22,13 +22,27 @@ bool EspWakeWord::Initialize(AudioCodec* codec) {
         ESP_LOGE(TAG, "Failed to initialize wakenet model");
         return false;
     }
-    if(wakenet_model_->num > 1) {
-        ESP_LOGW(TAG, "More than one model found, using the first one");
-    } else if (wakenet_model_->num == 0) {
+    if (wakenet_model_->num == 0) {
         ESP_LOGE(TAG, "No model found");
         return false;
     }
-    char *model_name = wakenet_model_->model_name[0];
+    // Prefer a model that matches "你好乐鑫" (Hi LeXin). We try to find names containing "hilexin/lexin".
+    int chosen = 0;
+    for (int i = 0; i < wakenet_model_->num; ++i) {
+        char* name = wakenet_model_->model_name[i];
+        if (name == nullptr) continue;
+        // case-insensitive substring match
+        std::string n(name);
+        for (auto& c : n) c = (char)tolower((unsigned char)c);
+        if (n.find("hilexin") != std::string::npos || n.find("hi_lexin") != std::string::npos || n.find("lexin") != std::string::npos) {
+            chosen = i;
+            break;
+        }
+    }
+    if (wakenet_model_->num > 1) {
+        ESP_LOGI(TAG, "Multiple models found. chosen=%d name=%s", chosen, wakenet_model_->model_name[chosen]);
+    }
+    char *model_name = wakenet_model_->model_name[chosen];
     wakenet_iface_ = (esp_wn_iface_t*)esp_wn_handle_from_name(model_name);
     wakenet_data_ = wakenet_iface_->create(model_name, DET_MODE_95);
 

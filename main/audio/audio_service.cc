@@ -654,6 +654,7 @@ void AudioService::ResetDecoder() {
 }
 
 void AudioService::CheckAndUpdateAudioPowerState() {
+    if (power_saver_paused_) return;
     auto now = std::chrono::steady_clock::now();
     auto input_elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - last_input_time_).count();
     auto output_elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - last_output_time_).count();
@@ -666,4 +667,13 @@ void AudioService::CheckAndUpdateAudioPowerState() {
     if (!codec_->input_enabled() && !codec_->output_enabled()) {
         esp_timer_stop(audio_power_timer_);
     }
+}
+
+uint32_t AudioService::MsSinceLastPlayback() {
+    auto now = std::chrono::steady_clock::now();
+    return (uint32_t)std::chrono::duration_cast<std::chrono::milliseconds>(now - last_output_time_).count();
+}
+
+void AudioService::PausePowerSaver(bool pause) {
+    power_saver_paused_ = pause;
 }
