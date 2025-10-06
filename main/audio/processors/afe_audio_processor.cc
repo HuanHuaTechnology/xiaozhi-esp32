@@ -39,8 +39,8 @@ void AfeAudioProcessor::Initialize(AudioCodec* codec, int frame_duration_ms, srm
     
     afe_config_t* afe_config = afe_config_init(input_format.c_str(), NULL, AFE_TYPE_VC, AFE_MODE_HIGH_PERF);
     afe_config->aec_mode = AEC_MODE_VOIP_HIGH_PERF;
-    afe_config->vad_mode = VAD_MODE_3;  // 从VAD_MODE_0改为VAD_MODE_3（降低灵敏度）
-    afe_config->vad_min_noise_ms = 500; // 从100ms增加到500ms（需要更长时间的声音才触发）
+    afe_config->vad_mode = VAD_MODE_4;  // 使用最低灵敏度模式（避免自我打断）
+    afe_config->vad_min_noise_ms = 1000; // 增加到1000ms（需要连续1秒的声音才触发）
     if (vad_model_name != nullptr) {
         afe_config->vad_model_name = vad_model_name;
     }
