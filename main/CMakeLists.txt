@@ -45,15 +45,6 @@ file(GLOB BOARD_COMMON_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/boards/common/*.cc)
 list(APPEND SOURCES ${BOARD_COMMON_SOURCES})
 list(APPEND INCLUDE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/boards/common)
 
-<<<<<<< HEAD
-# BLE 配网
-if(CONFIG_ENABLE_BLE_PROVISIONING)
-    list(APPEND SOURCES "protocols/ble_provisioning.cc")
-    list(APPEND INCLUDE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/protocols)
-endif()
-
-# 根据 BOARD_TYPE 配置添加对应的板级文件
-=======
 idf_build_get_property(build_components BUILD_COMPONENTS)
 # Function to find component dynamically by pattern
 function(find_component_by_pattern PATTERN COMPONENT_VAR PATH_VAR)
@@ -73,7 +64,6 @@ set(BUILTIN_ICON_FONT font_awesome_14_1)
 
 # Add board files according to BOARD_TYPE
 # Set default assets if the board uses partition table V2
->>>>>>> origin
 if(CONFIG_BOARD_TYPE_BREAD_COMPACT_WIFI)
     set(BOARD_TYPE "bread-compact-wifi")
     set(BUILTIN_TEXT_FONT font_puhui_basic_14_1)
