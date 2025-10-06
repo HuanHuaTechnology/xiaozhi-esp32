@@ -50,11 +50,21 @@ void AudioService::Initialize(AudioCodec* codec) {
 #endif
 
     audio_processor_->OnOutput([this](std::vector<int16_t>&& data) {
-        PushTaskToEncodeQueue(kAudioTaskTypeEncodeToSendQueue, std::move(data));
+        if (ShouldSendMicFrame()) {
+            PushTaskToEncodeQueue(kAudioTaskTypeEncodeToSendQueue, std::move(data));
+        }
     });
 
     audio_processor_->OnVadStateChange([this](bool speaking) {
         voice_detected_ = speaking;
+        // Track continuous VAD true duration for barge-in gating
+        auto now = std::chrono::steady_clock::now();
+        if (speaking) {
+            if (!vad_last_state_) {
+                vad_true_since_ = now;
+            }
+        }
+        vad_last_state_ = speaking;
         if (callbacks_.on_vad_change) {
             callbacks_.on_vad_change(speaking);
         }
@@ -624,6 +634,33 @@ bool AudioService::IsIdle() {
     return audio_encode_queue_.empty() && audio_decode_queue_.empty() && audio_playback_queue_.empty() && audio_testing_queue_.empty();
 }
 
+// Suppress mic frames while speaker is active unless VAD is continuously true long enough (barge-in)
+// Policy:
+// - If no recent playback (< 150 ms), always send mic frames
+// - If recent playback, require VAD true for >= 350 ms to allow barge-in
+//   This balances avoiding self-interrupt and allowing explicit user interruption
+bool AudioService::ShouldSendMicFrame() {
+    auto now = std::chrono::steady_clock::now();
+
+    // Consider playback recent if within 150 ms from last output
+    const int kRecentPlaybackMs = 150;
+    auto since_output_ms = std::chrono::duration_cast<std::chrono::milliseconds>(now - last_output_time_).count();
+    bool has_recent_playback = since_output_ms >= 0 && since_output_ms < kRecentPlaybackMs;
+
+    if (!has_recent_playback) {
+        return true;
+    }
+
+    // Require sustained VAD speaking for barge-in
+    if (!vad_last_state_) {
+        return false; // not speaking yet while playback is recent
+    }
+
+    const int kBargeInHoldMs = 350;
+    auto held_ms = std::chrono::duration_cast<std::chrono::milliseconds>(now - vad_true_since_).count();
+    return held_ms >= kBargeInHoldMs;
+}
+
 void AudioService::ResetDecoder() {
     std::lock_guard<std::mutex> lock(audio_queue_mutex_);
     opus_decoder_->ResetState();
@@ -632,6 +669,8 @@ void AudioService::ResetDecoder() {
     audio_playback_queue_.clear();
     audio_testing_queue_.clear();
     audio_queue_cv_.notify_all();
+    // Reset VAD gating state when decoder resets (e.g., on state changes)
+    vad_last_state_ = false;
 }
 
 void AudioService::CheckAndUpdateAudioPowerState() {
